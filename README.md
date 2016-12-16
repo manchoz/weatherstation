@@ -40,25 +40,16 @@ If you have everything set up correctly:
 - If the button is pressed, the display will show the current pressure.
 - If a Piezo Buzzer is connected, it will plays a funny sound on startup.
 - If a APA102 RGB Led strip is connected, it will display a rainbow of 7 pixels indicating the current pressure.
-- If a Google Cloud Platform project is configured (see instruction below), it will publish the sensor data to Google Cloug PubSub.
+- Sensor data will be published to the iot.eclipse.org public MQTT sandbox.
 
-Google Cloud Platform configuration (optional)
+MQTT broker configuration
 ==============================================
-0. Go to your project in the [Google Cloud Platform console](https://console.cloud.google.com/)
-0. Under *API Manager*, enable the following APIs: Cloud Pub/Sub
-0. Under *IAM & Admin*, create a new Service Account, provision a new private key and save the generated json credentials.
-0. Under *Pub/Sub*: create a new topic and in the *Permissions* add the service account created in the previous step with the role *Pub/Sub Publisher*.
-0. Under *Pub/Sub*: create a new *Pull subscription* on your new topic.
-0. Import the project into Android Studio. Add a file named `credentials.json` inside `app/src/main/res/raw/` with the contents of the credentials you downloaded in the previous steps.
-0. In `app/build.gradle`, replace the `buildConfigField` values with values from your project setup.
+0. In `app/build.gradle`, replace the `buildConfigField` `MQTT_TOPIC` value with the topic you would like to use to publish sensor data to your MQTT broker.
 
-After running the sample, you can check that your data is ingested in Google Cloud Pub/Sub by running the following command:
+After running the sample, you can check that your data is published to the Eclipse IoT broker at tcp://iot.eclipse.org:1883 using e.g the mosquitto_sub command line tool
 ```
-gcloud --project <CLOUD_PROJECT_ID> beta pubsub subscriptions pull <PULL_SUBSCRIBTION_NAME>
+mosquitto_sub -h iot.eclipse.org -t '[your_topic]'
 ```
-
-Note: If there is no `credentials.json` file in `app/src/main/res/raw`, the app will
- run offline and will not send sensor data to the [Google Cloud Pub/Sub](https://cloud.google.com/pubsub/).
 
 Next steps
 ==========
