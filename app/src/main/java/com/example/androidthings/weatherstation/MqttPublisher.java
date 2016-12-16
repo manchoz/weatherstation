@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 The Android Open Source Project
+ * Copyright 2016 The Android Open Source Project and others
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,6 +12,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ *
+ *      Benjamin Cabé <benjamin@eclipse.org> - Adapt PubSubPublisher for MQTT
+ *
  */
 
 package com.example.androidthings.weatherstation;
@@ -28,34 +32,33 @@ import android.os.HandlerThread;
 import android.util.Base64;
 import android.util.Log;
 
-import com.google.api.client.extensions.android.http.AndroidHttp;
-import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.api.client.http.HttpTransport;
-import com.google.api.client.json.JsonFactory;
-import com.google.api.client.json.jackson2.JacksonFactory;
-import com.google.api.services.pubsub.Pubsub;
-import com.google.api.services.pubsub.PubsubScopes;
 import com.google.api.services.pubsub.model.PublishRequest;
 import com.google.api.services.pubsub.model.PubsubMessage;
 
+import org.eclipse.paho.android.service.MqttAndroidClient;
+import org.eclipse.paho.client.mqttv3.DisconnectedBufferOptions;
+import org.eclipse.paho.client.mqttv3.IMqttActionListener;
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.IMqttToken;
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
-// TODO(proppy): move to a service class.
-class PubsubPublisher {
-    private static final String TAG = PubsubPublisher.class.getSimpleName();
+class MqttPublisher {
+    private static final String TAG = MqttPublisher.class.getSimpleName();
 
     private final Context mContext;
     private final String mAppname;
     private final String mTopic;
-
-    private Pubsub mPubsub;
-    private HttpTransport mHttpTransport;
 
     private Handler mHandler;
     private HandlerThread mHandlerThread;
@@ -65,35 +68,71 @@ class PubsubPublisher {
 
     private static final long PUBLISH_INTERVAL_MS = TimeUnit.MINUTES.toMillis(1);
 
-    PubsubPublisher(Context context, String appname, String project, String topic,
-                    int credentialResourceId) throws IOException {
+    private MqttAndroidClient mMqttAndroidClient;
+    private static final String MQTT_SERVER_URI = "tcp://iot.eclipse.org:1883";
+
+    MqttPublisher(Context context, String appname, String topic) throws IOException {
         mContext = context;
         mAppname = appname;
-        mTopic = "projects/" + project + "/topics/" + topic;
+        mTopic = topic;
 
-        mHandlerThread = new HandlerThread("pubsubPublisherThread");
+        mHandlerThread = new HandlerThread("mqttPublisherThread");
         mHandlerThread.start();
         mHandler = new Handler(mHandlerThread.getLooper());
 
-        InputStream jsonCredentials = mContext.getResources().openRawResource(credentialResourceId);
-        final GoogleCredential credentials;
-        try {
-            credentials = GoogleCredential.fromStream(jsonCredentials).createScoped(
-                    Collections.singleton(PubsubScopes.PUBSUB));
-        } finally {
-            try {
-                jsonCredentials.close();
-            } catch (IOException e) {
-                Log.e(TAG, "Error closing input stream", e);
+        mMqttAndroidClient = new MqttAndroidClient(mContext, MQTT_SERVER_URI, MqttClient.generateClientId());
+        mMqttAndroidClient.setCallback(new MqttCallbackExtended() {
+            @Override
+            public void connectComplete(boolean reconnect, String serverURI) {
+                Log.d(TAG, "MQTT connection complete");
             }
-        }
+
+            @Override
+            public void connectionLost(Throwable cause) {
+                Log.d(TAG, "MQTT connection lost");
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) throws Exception {
+                Log.d(TAG, "MQTT message arrived");
+            }
+
+            @Override
+            public void deliveryComplete(IMqttDeliveryToken token) {
+                Log.d(TAG, "MQTT delivery complete");
+            }
+        });
+
+        final MqttConnectOptions mqttConnectOptions = new MqttConnectOptions();
+        mqttConnectOptions.setAutomaticReconnect(true);
+        mqttConnectOptions.setCleanSession(false);
+
+
         mHandler.post(new Runnable() {
             @Override
             public void run() {
-                mHttpTransport = AndroidHttp.newCompatibleTransport();
-                JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
-                mPubsub = new Pubsub.Builder(mHttpTransport, jsonFactory, credentials)
-                        .setApplicationName(mAppname).build();
+            // Connect to the broker
+                try {
+                    mMqttAndroidClient.connect(mqttConnectOptions, null, new IMqttActionListener() {
+                        @Override
+                        public void onSuccess(IMqttToken asyncActionToken) {
+                            DisconnectedBufferOptions disconnectedBufferOptions = new DisconnectedBufferOptions();
+                            disconnectedBufferOptions.setBufferEnabled(true);
+                            disconnectedBufferOptions.setBufferSize(100);
+                            disconnectedBufferOptions.setPersistBuffer(false);
+                            disconnectedBufferOptions.setDeleteOldestMessages(false);
+                            mMqttAndroidClient.setBufferOpts(disconnectedBufferOptions);
+                        }
+
+                        @Override
+                        public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
+                            Log.d(TAG, "MQTT connection failure", exception);
+                        }
+                    });
+                } catch (MqttException e) {
+                    Log.d(TAG, "MQTT connection failure", e);
+                }
+
             }
         });
     }
@@ -112,12 +151,11 @@ class PubsubPublisher {
             @Override
             public void run() {
                 try {
-                    mHttpTransport.shutdown();
-                } catch (IOException e) {
-                    Log.d(TAG, "error destroying http transport");
+                    mMqttAndroidClient.disconnect();
+                } catch (MqttException e) {
+                    Log.d(TAG, "error disconnecting MQTT client");
                 } finally {
-                    mHttpTransport = null;
-                    mPubsub = null;
+                    mMqttAndroidClient = null;
                 }
             }
         });
@@ -150,13 +188,11 @@ class PubsubPublisher {
                     return;
                 }
                 Log.d(TAG, "publishing message: " + messagePayload);
-                PubsubMessage m = new PubsubMessage();
-                m.setData(Base64.encodeToString(messagePayload.toString().getBytes(),
-                        Base64.NO_WRAP));
-                PublishRequest request = new PublishRequest();
-                request.setMessages(Collections.singletonList(m));
-                mPubsub.projects().topics().publish(mTopic, request).execute();
-            } catch (JSONException | IOException e) {
+                MqttMessage m = new MqttMessage();
+                m.setPayload(messagePayload.toString().getBytes());
+                m.setQos(1);
+                mMqttAndroidClient.publish(mTopic, m);
+            } catch (JSONException | MqttException e) {
                 Log.e(TAG, "Error publishing message", e);
             } finally {
                 mHandler.postDelayed(mPublishRunnable, PUBLISH_INTERVAL_MS);
