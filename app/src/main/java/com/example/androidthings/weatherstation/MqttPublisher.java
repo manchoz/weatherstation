@@ -66,7 +66,7 @@ class MqttPublisher {
     private float mLastTemperature = Float.NaN;
     private float mLastPressure = Float.NaN;
 
-    private static final long PUBLISH_INTERVAL_MS = TimeUnit.MINUTES.toMillis(1);
+    private static final long PUBLISH_INTERVAL_MS = TimeUnit.SECONDS.toMillis(1);
 
     private MqttAndroidClient mMqttAndroidClient;
     private static final String MQTT_SERVER_URI = "tcp://iot.eclipse.org:1883";
